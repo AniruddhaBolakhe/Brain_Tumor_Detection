@@ -1,6 +1,7 @@
 streamlit
-google-generativeai
+google-generativeai==0.3.2
 numpy
 pillow
 tensorflow
 opencv-python
+protobuf<4.21  # Fix for TensorFlow compatibility
