@@ -5,7 +5,7 @@ from PIL import Image
 import tensorflow as tf
 import cv2
 
-# Configure the generative AI model with your API key
+# Configure the generative AI model with your API key (hardcoded)
 genai.configure(api_key="AIzaSyB2G7Xyl8i74UQnAOyfP3Il9PU5OC72Alo")
 
 # Define the tumor types
@@ -70,10 +70,9 @@ st.sidebar.info("Upload images and select the model for analysis.")
 
 # Dropdown for selecting the model
 model_options = {
-    "VGGNet": "C:/Users/User/Desktop/Brain_Tumor/model.h5",
-    "EfficientNet": "C:/Users/User/Desktop/Brain_Tumor/model_EfficientNetB0.h5",
-    "Inception": "C:/Users/User/Desktop/Brain_Tumor/model_InceptionV3.h5",
-    
+    "VGGNet": "C:/Users/User/Desktop/Brain_Tumor/Models/model.h5",
+    "EfficientNet": "C:/Users/User/Desktop/Brain_Tumor/Models/model_EfficientNetB0.h5",
+    "Inception": "C:/Users/User/Desktop/Brain_Tumor/Models/model_InceptionV3.h5",  
 }
 selected_model_name = st.sidebar.selectbox("Select CNN Model", list(model_options.keys()))
 selected_model_path = model_options[selected_model_name]
@@ -97,7 +96,6 @@ if uploaded_files and len(uploaded_files) == 4:
         for idx, uploaded_file in enumerate(uploaded_files):
             image = Image.open(uploaded_file)
             st.image(image, caption=f"{views[idx]} View", use_container_width=True)
-
 
             image_np = np.array(image)
             predicted_class, confidence = predict(model, image_np)
