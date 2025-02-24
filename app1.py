@@ -70,7 +70,7 @@ def fetch_gemini_insights(tumor_type):
 st.title(" Brain Tumor Detection ")
 st.markdown("""
 system trained on neural networks to assist in identifying brain tumors through MRI scans. 
-Supports the  tumor types:
+=tumor types(Supported):
 - **Glioma Tumor**
 - **Meningioma Tumor**
 - **Pituitary Tumor**
