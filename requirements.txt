@@ -1,0 +1,7 @@
+streamlit
+tensorflow
+pillow
+opencv-python-headless
+numpy
+gdown
+google-generativeai
