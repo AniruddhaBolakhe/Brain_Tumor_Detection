@@ -7,23 +7,17 @@ import cv2
 import gdown
 import os
 
-# Configure the generative AI model with your API key (hardcoded)
 genai.configure(api_key="AIzaSyB2G7Xyl8i74UQnAOyfP3Il9PU5OC72Alo")
 
-# Define the tumor types
-CLASS_NAMES = ["Glioma Tumor", "Meningioma Tumor", "No Tumor", "Pituitary Tumor"]
 
-# Google Drive file IDs
+CLASS_NAMES = ["Glioma Tumor", "Meningioma Tumor", "No Tumor", "Pituitary Tumor"]
 model_drive_links = {
     "VGGNet": "1uS5vjUPWXJOpNREdzKkx_7AZWwqwOToY",
     "EfficientNet": "105GNzjRlc9z7AIQKbTFoY3GQBaNRkepb",
     "Inception": "15QeQquQ_-IoOmGy8ZLOaG64VPBgzqD76",
 }
-
-# Ensure model directory exists
 os.makedirs("models", exist_ok=True)
 
-# Function to download model
 def download_model(model_name):
     file_id = model_drive_links[model_name]
     model_path = f"models/{model_name}.h5"
@@ -33,8 +27,7 @@ def download_model(model_name):
         gdown.download(f"https://drive.google.com/uc?id={file_id}", model_path, quiet=False)
         st.success(f"{model_name} downloaded successfully! ✅")
     return model_path
-
-# Load model function
+    
 def load_model(model_path):
     return tf.keras.models.load_model(model_path)
 
@@ -53,7 +46,18 @@ def predict(model, image):
     return predicted_class[0], confidence
 
 def fetch_gemini_insights(tumor_type):
-    prompt = f"Please provide detailed information about {tumor_type}. Include symptoms, treatment options, and prognosis, give the information like a doctor."
+    prompt = f"""
+    You are an experienced neurologist and brain tumor specialist. A patient has been diagnosed with {tumor_type}.  
+    Explain the condition in a **simple and empathetic** manner, helping the patient understand:  
+    - **What this tumor is** and how it affects the brain.  
+    - **Symptoms they may experience** and why they occur.  
+    - **Possible causes or risk factors.**  
+    - **Treatment options**, including medications, surgery, or radiation, and their pros/cons.  
+    - **Next steps**, like seeking a neurologist, further tests, or lifestyle changes.  
+      
+    Avoid complex medical jargon; explain in a way a patient with no medical background can understand.  
+    """
+
     
     try:
         model = genai.GenerativeModel("gemini-1.5-flash-latest")
@@ -63,14 +67,13 @@ def fetch_gemini_insights(tumor_type):
         return f"Error fetching insights: {str(e)}"
 
 # Streamlit UI
-st.title(" Brain Tumor Detection System")
+st.title(" Brain Tumor Detection ")
 st.markdown("""
-This system leverages trained neural networks to assist in identifying brain tumors through MRI scans. 
-It supports the following tumor types:
+system trained on neural networks to assist in identifying brain tumors through MRI scans. 
+Supports the  tumor types:
 - **Glioma Tumor**
 - **Meningioma Tumor**
 - **Pituitary Tumor**
-- **No Tumor** (normal brain scan)
 """)
 
 st.sidebar.title("Navigation")
