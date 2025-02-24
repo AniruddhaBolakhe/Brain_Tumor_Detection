@@ -1,6 +1,0 @@
-streamlit
-google-generativeai
-numpy
-pillow
-tensorflow
-opencv-python
