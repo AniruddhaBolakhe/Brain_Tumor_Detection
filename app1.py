@@ -47,16 +47,17 @@ def predict(model, image):
 
 def fetch_gemini_insights(tumor_type):
     prompt = f"""
-    You are an experienced neurologist and brain tumor specialist. A patient has been diagnosed with {tumor_type}.  
-    Explain the condition in a **simple and empathetic** manner, helping the patient understand:  
-    - **What this tumor is** and how it affects the brain.  
-    - **Symptoms they may experience** and why they occur.  
-    - **Possible causes or risk factors.**  
-    - **Treatment options**, including medications, surgery, or radiation, and their pros/cons.  
-    - **Next steps**, like seeking a neurologist, further tests, or lifestyle changes.  
-      
-    Avoid complex medical jargon; explain in a way a patient with no medical background can understand.  
+    You are a brain tumor specialist. Explain {tumor_type} briefly and clearly to a patient.  
+    Cover:  
+    - **What it is**  
+    - **Symptoms**  
+    - **Causes**  
+    - **Treatment options**  
+    - **Next steps**  
+
+    Keep it simple, direct, and easy to understand.
     """
+
 
     
     try:
