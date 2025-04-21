@@ -133,5 +133,5 @@ st.markdown("#### 👨‍💻 Project Contributors")
 st.markdown("""
 - [Aniruddha Bolakhe](https://www.linkedin.com/in/aniruddha-bolakhe-3b5090247/)
 - [Nabhya Sharma](https://www.linkedin.com/in/nabhya-sharma-b0a374248/)
-- [Pranav Karwa](https://www.linkedin.com/in/pranav-karwa/)
+- [Pranav Karwa](https://www.linkedin.com/in/pranav-karwa-a91663249)
 """)
