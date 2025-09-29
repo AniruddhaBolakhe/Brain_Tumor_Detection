@@ -7,41 +7,116 @@ import cv2
 import gdown
 import os
 
-# Configure the generative AI model with your API key (hardcoded)
+# -------------------------------
+# Configure the generative AI model (kept as in your format)
+# -------------------------------
 genai.configure(api_key="AIzaSyB2G7Xyl8i74UQnAOyfP3Il9PU5OC72Alo")
 
+# -------------------------------
 # Define the tumor types
+# -------------------------------
 CLASS_NAMES = ["Glioma Tumor", "Meningioma Tumor", "No Tumor", "Pituitary Tumor"]
 
+# -------------------------------
 # Google Drive file IDs
+# -------------------------------
 model_drive_links = {
     "VGGNet": "1uS5vjUPWXJOpNREdzKkx_7AZWwqwOToY",
     "EfficientNet": "105GNzjRlc9z7AIQKbTFoY3GQBaNRkepb",
     "Inception": "15QeQquQ_-IoOmGy8ZLOaG64VPBgzqD76",
 }
 
+# -------------------------------
+# Per-model input sizes & preprocessing
+# -------------------------------
+from tensorflow.keras.applications.inception_v3 import preprocess_input as inception_preprocess
+try:
+    from tensorflow.keras.applications.efficientnet import preprocess_input as efficientnet_preprocess
+    HAS_EFF_PREPROC = True
+except Exception:
+    HAS_EFF_PREPROC = False
+
+MODEL_CONFIG = {
+    "VGGNet": {
+        "size": (224, 224),
+        "preprocess": "normalize_01",  # 0..1 scaling
+    },
+    "EfficientNet": {
+        "size": (224, 224),
+        # If your EfficientNet was trained with keras.applications.efficientnet preprocessing,
+        # set this to "efficientnet_preprocess" instead of "normalize_01".
+        "preprocess": "normalize_01" if not HAS_EFF_PREPROC else "normalize_01",
+    },
+    "Inception": {
+        "size": (299, 299),
+        "preprocess": "inception_preprocess",  # maps to [-1, 1]
+    },
+}
+
+# -------------------------------
 # Ensure model directory exists
+# -------------------------------
 os.makedirs("models", exist_ok=True)
 
+# -------------------------------
 # Function to download model
+# -------------------------------
 def download_model(model_name):
     file_id = model_drive_links[model_name]
     model_path = f"models/{model_name}.h5"
-    
     if not os.path.exists(model_path):  # Avoid re-downloading
         st.info(f"Downloading {model_name} model... ")
         gdown.download(f"https://drive.google.com/uc?id={file_id}", model_path, quiet=False)
         st.success(f"{model_name} downloaded successfully!")
     return model_path
 
-# Load model function
+# -------------------------------
+# Load model function (with Flatten fix and safe loader)
+# -------------------------------
 def load_model(model_path):
-    return tf.keras.models.load_model(model_path)
+    class FlattenFix(tf.keras.layers.Flatten):
+        def call(self, inputs):
+            # unwrap bad graphs saved as Flatten()([x])
+            if isinstance(inputs, (list, tuple)):
+                inputs = inputs[0]
+            return super().call(inputs)
+
+    custom_objects = {"Flatten": FlattenFix}
+
+    # Keras 3 often needs safe_mode=False; older Keras doesn't have it.
+    try:
+        return tf.keras.models.load_model(
+            model_path, compile=False, custom_objects=custom_objects, safe_mode=False
+        )
+    except TypeError:
+        return tf.keras.models.load_model(
+            model_path, compile=False, custom_objects=custom_objects
+        )
+
+# -------------------------------
+# Preprocessing helpers (selected later based on model)
+# -------------------------------
+CURRENT_SIZE = (224, 224)
+CURRENT_PREPROC = "normalize_01"
 
 def preprocess_image(image):
-    image = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
-    image = cv2.resize(image, (224, 224))
-    image = np.array(image) / 255.0
+    """
+    image: numpy RGB array
+    Applies per-model resizing + preprocessing selected via CURRENT_SIZE / CURRENT_PREPROC.
+    """
+    # Do NOT swap to BGR unless you trained that way; keep RGB.
+    image = cv2.resize(image, CURRENT_SIZE, interpolation=cv2.INTER_AREA).astype("float32")
+
+    if CURRENT_PREPROC == "normalize_01":
+        image = image / 255.0
+    elif CURRENT_PREPROC == "inception_preprocess":
+        image = inception_preprocess(image)  # returns [-1, 1]
+    elif CURRENT_PREPROC == "efficientnet_preprocess" and HAS_EFF_PREPROC:
+        image = efficientnet_preprocess(image)
+    else:
+        # default fallback
+        image = image / 255.0
+
     image = np.expand_dims(image, axis=0)
     return image
 
@@ -52,9 +127,11 @@ def predict(model, image):
     confidence = np.max(prediction)
     return predicted_class[0], confidence
 
+# -------------------------------
+# Gemini insights (unchanged style)
+# -------------------------------
 def fetch_gemini_insights(tumor_type):
     prompt = f"Please provide detailed information about {tumor_type}. Include symptoms, treatment options, and prognosis, give the information like a doctor."
-    
     try:
         model = genai.GenerativeModel("gemini-1.5-flash-latest")
         response = model.generate_content(prompt)
@@ -62,7 +139,9 @@ def fetch_gemini_insights(tumor_type):
     except Exception as e:
         return f"Error fetching insights: {str(e)}"
 
+# -------------------------------
 # Streamlit UI
+# -------------------------------
 st.title(" Brain Tumor Detection System")
 st.markdown("""
 This system leverages trained neural networks to assist in identifying brain tumors through MRI scans. 
@@ -76,11 +155,25 @@ It supports the following tumor types:
 st.sidebar.title("Navigation")
 st.sidebar.info("Upload images and select the model for analysis.")
 
+# -------------------------------
 # Dropdown for selecting the model
+# -------------------------------
 selected_model_name = st.sidebar.selectbox("Select CNN Model", list(model_drive_links.keys()))
 selected_model_path = download_model(selected_model_name)
 
+# Set global preprocess config based on selected model
+CURRENT_SIZE = MODEL_CONFIG[selected_model_name]["size"]
+CURRENT_PREPROC = MODEL_CONFIG[selected_model_name]["preprocess"]
+
+# Optional: allow switching EfficientNet to keras preprocess if needed
+if selected_model_name == "EfficientNet" and HAS_EFF_PREPROC:
+    use_eff_pre = st.sidebar.checkbox("Use keras EfficientNet preprocessing", value=False)
+    if use_eff_pre:
+        CURRENT_PREPROC = "efficientnet_preprocess"
+
+# -------------------------------
 # Upload multiple images
+# -------------------------------
 st.header(" Upload MRI Scans (All Views)")
 uploaded_files = st.file_uploader(
     "Upload the Left, Right, Top, and Bottom views of the brain MRI scan (JPG, JPEG, PNG)", 
@@ -95,7 +188,8 @@ if uploaded_files and len(uploaded_files) == 4:
         results = []
         views = ["Left", "Right", "Top", "Bottom"]
         for idx, uploaded_file in enumerate(uploaded_files):
-            image = Image.open(uploaded_file)
+            # Ensure RGB to avoid RGBA/grayscale issues
+            image = Image.open(uploaded_file).convert("RGB")
             st.image(image, caption=f"{views[idx]} View", use_container_width=True)
 
             image_np = np.array(image)
@@ -127,7 +221,9 @@ elif uploaded_files:
 else:
     st.info("Upload MRI scans to begin the analysis.")
 
+# -------------------------------
 # Footer Section
+# -------------------------------
 st.markdown("---")
 st.markdown("####  Project Contributors")
 st.markdown("""
