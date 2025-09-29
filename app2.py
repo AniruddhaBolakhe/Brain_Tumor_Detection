@@ -10,7 +10,7 @@ import os
 # -------------------------------
 # Configure the generative AI model (kept as in your format)
 # -------------------------------
-genai.configure(api_key="AIzaSyB2G7Xyl8i74UQnAOyfP3Il9PU5OC72Alo")
+genai.configure(api_key="AIzaSyC3-6CYA2z4sqtAVBAjdUKsYiANsi6zfqA")
 
 # -------------------------------
 # Define the tumor types
@@ -231,3 +231,4 @@ st.markdown("""
 - [Nabhya Sharma](https://www.linkedin.com/in/nabhya-sharma-b0a374248/)
 - [Pranav Karwa](https://www.linkedin.com/in/pranav-karwa-a91663249)
 """)
+
