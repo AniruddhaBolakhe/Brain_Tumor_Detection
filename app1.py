@@ -7,27 +7,34 @@ import cv2
 import gdown
 import os
 
+# Configure the generative AI model with your API key (hardcoded)
 genai.configure(api_key="AIzaSyB2G7Xyl8i74UQnAOyfP3Il9PU5OC72Alo")
 
-
+# Define the tumor types
 CLASS_NAMES = ["Glioma Tumor", "Meningioma Tumor", "No Tumor", "Pituitary Tumor"]
+
+# Google Drive file IDs
 model_drive_links = {
     "VGGNet": "1uS5vjUPWXJOpNREdzKkx_7AZWwqwOToY",
     "EfficientNet": "105GNzjRlc9z7AIQKbTFoY3GQBaNRkepb",
     "Inception": "15QeQquQ_-IoOmGy8ZLOaG64VPBgzqD76",
 }
+
+# Ensure model directory exists
 os.makedirs("models", exist_ok=True)
 
+# Function to download model
 def download_model(model_name):
     file_id = model_drive_links[model_name]
     model_path = f"models/{model_name}.h5"
     
     if not os.path.exists(model_path):  # Avoid re-downloading
-        st.info(f"Downloading {model_name} model... ⏳")
+        st.info(f"Downloading {model_name} model... ")
         gdown.download(f"https://drive.google.com/uc?id={file_id}", model_path, quiet=False)
-        st.success(f"{model_name} downloaded successfully! ✅")
+        st.success(f"{model_name} downloaded successfully!")
     return model_path
-    
+
+# Load model function
 def load_model(model_path):
     return tf.keras.models.load_model(model_path)
 
@@ -46,19 +53,7 @@ def predict(model, image):
     return predicted_class[0], confidence
 
 def fetch_gemini_insights(tumor_type):
-    prompt = f"""
-    You are a brain tumor specialist. Explain {tumor_type} briefly and clearly to a patient.  
-    Cover:  
-    - **What it is**  
-    - **Symptoms**  
-    - **Causes**  
-    - **Treatment options**  
-    - **Next steps**  
-
-    Keep it simple, direct, and easy to understand.
-    """
-
-
+    prompt = f"Please provide detailed information about {tumor_type}. Include symptoms, treatment options, and prognosis, give the information like a doctor."
     
     try:
         model = genai.GenerativeModel("gemini-1.5-flash-latest")
@@ -68,13 +63,14 @@ def fetch_gemini_insights(tumor_type):
         return f"Error fetching insights: {str(e)}"
 
 # Streamlit UI
-st.title(" Brain Tumor Detection ")
+st.title(" Brain Tumor Detection System")
 st.markdown("""
-system trained on neural networks to assist in identifying brain tumors through MRI scans. 
-Tumor types(Supported):
+This system leverages trained neural networks to assist in identifying brain tumors through MRI scans. 
+It supports the following tumor types:
 - **Glioma Tumor**
 - **Meningioma Tumor**
 - **Pituitary Tumor**
+- **No Tumor** (normal brain scan)
 """)
 
 st.sidebar.title("Navigation")
@@ -85,7 +81,7 @@ selected_model_name = st.sidebar.selectbox("Select CNN Model", list(model_drive_
 selected_model_path = download_model(selected_model_name)
 
 # Upload multiple images
-st.header("📋 Upload MRI Scans (All Views)")
+st.header(" Upload MRI Scans (All Views)")
 uploaded_files = st.file_uploader(
     "Upload the Left, Right, Top, and Bottom views of the brain MRI scan (JPG, JPEG, PNG)", 
     type=["jpg", "jpeg", "png"], 
@@ -116,7 +112,7 @@ if uploaded_files and len(uploaded_files) == 4:
         tumor_type = results[0][1]
         insights = fetch_gemini_insights(tumor_type)
 
-        st.subheader(f"💡 Detailed Information About {tumor_type}")
+        st.subheader(f" Detailed Information About {tumor_type}")
         st.markdown(insights)
 
         if all(diagnosis == "No Tumor" for _, diagnosis, _ in results):
@@ -125,8 +121,17 @@ if uploaded_files and len(uploaded_files) == 4:
         else:
             st.error("**Final Interpretation**: Tumor detected in one or more views. Please consult a neurologist or radiologist for further evaluation.")
     except Exception as e:
-        st.error(f"⚠️ An error occurred: {e}")
+        st.error(f" An error occurred: {e}")
 elif uploaded_files:
-    st.warning("⚠️ Please upload exactly 4 images (Left, Right, Top, and Bottom views).")
+    st.warning(" Please upload exactly 4 images (Left, Right, Top, and Bottom views).")
 else:
     st.info("Upload MRI scans to begin the analysis.")
+
+# Footer Section
+st.markdown("---")
+st.markdown("####  Project Contributors")
+st.markdown("""
+- [Aniruddha Bolakhe](https://www.linkedin.com/in/aniruddha-bolakhe-3b5090247/)
+- [Nabhya Sharma](https://www.linkedin.com/in/nabhya-sharma-b0a374248/)
+- [Pranav Karwa](https://www.linkedin.com/in/pranav-karwa-a91663249)
+""")
