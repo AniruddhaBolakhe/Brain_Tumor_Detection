@@ -8,7 +8,6 @@ import gdown
 import os
 
 # Configure the generative AI model with your API key (hardcoded)
-# (Consider moving to st.secrets in production)
 genai.configure(api_key="AIzaSyC3-6CYA2z4sqtAVBAjdUKsYiANsi6zfqA")
 
 # Define the tumor types
@@ -21,7 +20,7 @@ model_drive_links = {
     "Inception": "15QeQquQ_-IoOmGy8ZLOaG64VPBgzqD76",
 }
 
-# ---------- Per-model input sizes & preprocessing ----------
+# ---- Per-model input sizes & preprocessing ----
 from tensorflow.keras.applications.inception_v3 import preprocess_input as inception_preprocess
 try:
     from tensorflow.keras.applications.efficientnet import preprocess_input as efficientnet_preprocess
@@ -30,20 +29,9 @@ except Exception:
     HAS_EFF_PREPROC = False
 
 MODEL_CONFIG = {
-    "VGGNet": {
-        "size": (224, 224),
-        "preprocess": "normalize_01",  # 0..1 scaling
-    },
-    "EfficientNet": {
-        "size": (224, 224),
-        # If your EfficientNet was trained with keras EfficientNet preprocessing,
-        # change to "efficientnet_preprocess".
-        "preprocess": "normalize_01",
-    },
-    "Inception": {
-        "size": (299, 299),
-        "preprocess": "inception_preprocess",  # maps to [-1, 1]
-    },
+    "VGGNet": {"size": (224, 224), "preprocess": "normalize_01"},
+    "EfficientNet": {"size": (224, 224), "preprocess": "normalize_01"},  # switch to "efficientnet_preprocess" if trained that way
+    "Inception": {"size": (299, 299), "preprocess": "inception_preprocess"},
 }
 
 # Ensure model directory exists
@@ -59,19 +47,21 @@ def download_model(model_name):
         st.success(f"{model_name} downloaded successfully!")
     return model_path
 
-# -------- Robust Flatten fix & model loader --------
+# ----- Robust Flatten fix & model loader -----
 def load_model(model_path):
-    class FlattenFix(tf.keras.layers.Layer):
-        """Replacement for saved models that did Flatten()([x]) instead of Flatten()(x)."""
+    class FlattenFix(tf.keras.layers.Flatten):
+        """Fixes models saved with Flatten()([x]) by unwrapping list/tuple inputs."""
+        def __init__(self, *args, **kwargs):
+            # Some saved configs include data_format which Flatten may not accept; ignore it.
+            kwargs.pop("data_format", None)
+            super().__init__(*args, **kwargs)
+
         def call(self, inputs):
             x = inputs
             # unwrap nested lists/tuples until reaching a tensor
             while isinstance(x, (list, tuple)) and len(x) > 0:
                 x = x[0]
-            if not hasattr(x, "shape"):
-                x = tf.convert_to_tensor(x)
-            # flatten via reshape (batch, -1)
-            return tf.reshape(x, (tf.shape(x)[0], -1))
+            return super().call(x)
 
     custom_objects = {"Flatten": FlattenFix}
     try:
@@ -79,12 +69,12 @@ def load_model(model_path):
             model_path, compile=False, custom_objects=custom_objects, safe_mode=False
         )
     except TypeError:
-        # for older TF/Keras that doesn't support safe_mode
+        # for TF/Keras versions without safe_mode
         return tf.keras.models.load_model(
             model_path, compile=False, custom_objects=custom_objects
         )
 
-# -------- Global (set after selection) --------
+# ---- Global (set after selection) ----
 CURRENT_SIZE = (224, 224)
 CURRENT_PREPROC = "normalize_01"
 
@@ -93,13 +83,13 @@ def preprocess_image(image):
     image: numpy RGB array
     Applies per-model resizing + preprocessing selected via CURRENT_SIZE / CURRENT_PREPROC.
     """
-    # Keep RGB (do NOT swap to BGR unless you trained that way)
+    # Keep RGB; don't swap to BGR unless you trained that way.
     image = cv2.resize(image, CURRENT_SIZE, interpolation=cv2.INTER_AREA).astype("float32")
 
     if CURRENT_PREPROC == "normalize_01":
         image = image / 255.0
     elif CURRENT_PREPROC == "inception_preprocess":
-        image = inception_preprocess(image)  # [-1, 1]
+        image = inception_preprocess(image)  # maps to [-1, 1]
     elif CURRENT_PREPROC == "efficientnet_preprocess" and HAS_EFF_PREPROC:
         image = efficientnet_preprocess(image)
     else:
@@ -116,13 +106,13 @@ def predict(model, image):
     return predicted_class[0], confidence
 
 def fetch_gemini_insights(tumor_type):
-    # Fixed model name (no "-latest")
     prompt = (
         f"Provide concise, clinician-style information for {tumor_type} in adult patients. "
         "Cover: typical symptoms, initial evaluation, common treatments, expected prognosis, "
         "and red-flag signs requiring urgent care. Bullet points + short paragraphs. Not medical advice."
     )
     try:
+        # FIX: use a valid model id (no '-latest')
         model = genai.GenerativeModel("gemini-1.5-flash")
         response = model.generate_content(prompt)
         return response.text
