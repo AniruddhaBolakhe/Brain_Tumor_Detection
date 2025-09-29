@@ -10,16 +10,14 @@ import os
 # =========================
 # CONFIG
 # =========================
-# (Prefer: put your key in st.secrets["GEMINI_API_KEY"])
+# Tip: prefer st.secrets["GEMINI_API_KEY"]
 genai.configure(api_key="AIzaSyC3-6CYA2z4sqtAVBAjdUKsYiANsi6zfqA")
 
 CLASS_NAMES = ["Glioma Tumor", "Meningioma Tumor", "No Tumor", "Pituitary Tumor"]
 
-# Google Drive file IDs (unchanged)
+# Only VGGNet now
 model_drive_links = {
     "VGGNet": "1uS5vjUPWXJOpNREdzKkx_7AZWwqwOToY",
-    "EfficientNet": "105GNzjRlc9z7AIQKbTFoY3GQBaNRkepb",
-    "Inception": "15QeQquQ_-IoOmGy8ZLOaG64VPBgzqD76",
 }
 
 os.makedirs("models", exist_ok=True)
@@ -41,11 +39,11 @@ def download_model(model_name: str) -> str:
     return model_path
 
 def _get_custom_objects():
-    # Common custom ops used by EfficientNet/TF Hub/etc.
+    # Common custom ops used in many TF/Keras exports
     return {
         "swish": tf.nn.swish,
         "relu6": tf.nn.relu6,
-        "tf": tf,  # sometimes models reference tf ops in Lambda layers
+        "tf": tf,  # for Lambda layers referencing tf.*
     }
 
 @st.cache_resource(show_spinner=True)
@@ -61,41 +59,27 @@ def load_model(model_path: str):
         st.error(f"Error loading model from {model_path}: {e}")
         raise
 
-def get_model_input_hw(model) -> tuple[int, int]:
+def get_model_input_hw(model):
     """
-    Returns (H, W) from model.input_shape. Handles shapes like:
-    (None, H, W, C) or (H, W, C) or nested lists (for multi-input models).
+    Returns (H, W) from model.inputs[0].shape, robust for single/multi-IO models.
+    Expected NHWC. Falls back to 224x224 if unknown.
     """
-    shape = model.input_shape
-    # If model has multiple inputs, take the first
-    if isinstance(shape, list) or isinstance(shape, tuple) and isinstance(shape[0], (list, tuple)):
-        shape = shape[0]
-
-    # shape now expected like (None, H, W, C) or (H, W, C)
-    if len(shape) == 4:
-        _, H, W, C = shape
-    elif len(shape) == 3:
-        H, W, C = shape
-    else:
-        raise ValueError(f"Unexpected input shape: {shape}")
-
+    shape = model.inputs[0].shape  # TensorShape like (None, H, W, C)
+    H = int(shape[1]) if shape[1] is not None else 224
+    W = int(shape[2]) if shape[2] is not None else 224
+    C = int(shape[3]) if shape[3] is not None else 3
     if C != 3:
-        raise ValueError(f"Model expects {C} channels; this app supports RGB (3 channels) only.")
-    if H is None or W is None:
-        # fallback to common sizes (rare)
-        H, W = 224, 224
-    return int(H), int(W)
+        raise ValueError(f"Model expects {C} channels; this app supports RGB (3) only.")
+    return H, W
 
-def preprocess_image_for_model(image_pil: Image.Image, target_hw: tuple[int, int]) -> np.ndarray:
+def preprocess_image_for_model(image_pil: Image.Image, target_hw):
     """
-    Convert PIL->RGB numpy, resize to target (H, W), scale to [0,1], add batch dim.
-    We keep simple 0..1 scaling since your VGG works that way; most custom-trained
-    Inception/EfficientNet models will also be fine with this normalization.
+    PIL -> RGB np, resize to (H, W), scale to [0,1], add batch dim.
     """
     image = image_pil.convert("RGB")
     np_img = np.array(image)
     H, W = target_hw
-    np_img = cv2.resize(np_img, (W, H), interpolation=cv2.INTER_AREA)  # cv2 uses (W,H)
+    np_img = cv2.resize(np_img, (W, H), interpolation=cv2.INTER_AREA)  # cv2: (W,H)
     np_img = np_img.astype("float32") / 255.0
     np_img = np.expand_dims(np_img, axis=0)  # (1, H, W, 3)
     return np_img
@@ -104,14 +88,19 @@ def predict_single(model, image_pil: Image.Image):
     target_hw = get_model_input_hw(model)
     x = preprocess_image_for_model(image_pil, target_hw)
     preds = model.predict(x, verbose=0)
-    if preds.ndim == 1:
-        # shape (num_classes,)
-        pred_idx = int(np.argmax(preds))
-        conf = float(np.max(preds))
-    else:
-        # shape (1, num_classes)
-        pred_idx = int(np.argmax(preds, axis=1)[0])
-        conf = float(np.max(preds))
+
+    # Handle logits vs probabilities
+    if preds.ndim == 2 and preds.shape[0] == 1:
+        preds = preds[0]
+    if preds.ndim != 1:
+        preds = np.squeeze(preds)
+
+    # softmax if not already
+    if not np.allclose(np.sum(preds), 1.0, atol=1e-3):
+        preds = tf.nn.softmax(preds).numpy()
+
+    pred_idx = int(np.argmax(preds))
+    conf = float(np.max(preds))
     return pred_idx, conf
 
 def fetch_gemini_insights(tumor_type: str) -> str:
@@ -134,65 +123,56 @@ def fetch_gemini_insights(tumor_type: str) -> str:
 # =========================
 st.title("🧠 Brain Tumor Detection System")
 st.markdown("""
-This system uses trained CNN models to assist in identifying brain tumors from MRI scans.
+Upload a single MRI image. The app will run your **VGGNet** model and provide a predicted class
+along with patient-friendly information via Gemini 2.5 Flash.
 
-Supported classes:
-- **Glioma Tumor**
-- **Meningioma Tumor**
-- **Pituitary Tumor**
-- **No Tumor**
+**Classes**
+- Glioma Tumor
+- Meningioma Tumor
+- Pituitary Tumor
+- No Tumor
 """)
 
-st.sidebar.title("Navigation")
-st.sidebar.info("Upload images and select the model for analysis.")
-
-# Model selector & download
-selected_model_name = st.sidebar.selectbox("Select CNN Model", list(model_drive_links.keys()))
+st.sidebar.title("Model")
+selected_model_name = st.sidebar.selectbox("Select CNN Model", ["VGGNet"])
 selected_model_path = download_model(selected_model_name)
 
-st.header("📤 Upload MRI Scans (All Views)")
-uploaded_files = st.file_uploader(
-    "Upload the Left, Right, Top, and Bottom views of the brain MRI scan (JPG, JPEG, PNG)",
+st.header("📤 Upload a Single MRI Image")
+uploaded_file = st.file_uploader(
+    "Upload one MRI image (JPG/JPEG/PNG)",
     type=["jpg", "jpeg", "png"],
-    accept_multiple_files=True
+    accept_multiple_files=False
 )
 
-if uploaded_files and len(uploaded_files) == 4:
+if uploaded_file is not None:
     try:
+        # Show image
+        image = Image.open(uploaded_file)
+        st.image(image, caption="Uploaded MRI", use_container_width=True)
+
+        # Load model & predict
         model = load_model(selected_model_path)
+        pred_idx, confidence = predict_single(model, image)
 
-        results = []
-        views = ["Left", "Right", "Top", "Bottom"]
-        for idx, uploaded_file in enumerate(uploaded_files):
-            image = Image.open(uploaded_file)
-            st.image(image, caption=f"{views[idx]} View", use_container_width=True)
+        diagnosis = CLASS_NAMES[pred_idx] if 0 <= pred_idx < len(CLASS_NAMES) else f"Class {pred_idx}"
+        st.subheader("🩺 Prediction")
+        st.markdown(f"**Predicted Condition:** {diagnosis}")
+        st.markdown(f"**Confidence:** {confidence*100:.2f}%")
 
-            pred_idx, confidence = predict_single(model, image)
-            diagnosis = CLASS_NAMES[pred_idx] if 0 <= pred_idx < len(CLASS_NAMES) else f"Class {pred_idx}"
-            results.append((views[idx], diagnosis, confidence * 100.0))
+        # Patient-friendly info
+        st.subheader(f"📚 About {diagnosis}")
+        st.markdown(fetch_gemini_insights(diagnosis))
 
-        st.subheader("🩺 Diagnostic Report (Combined Views)")
-        for view, diagnosis, conf_pct in results:
-            st.markdown(f"**View**: {view} &nbsp;&nbsp; **Predicted Condition**: {diagnosis} &nbsp;&nbsp; **Confidence**: {conf_pct:.2f}%")
-
-        # Provide educational insights for the first predicted class
-        tumor_type = results[0][1]
-        st.subheader(f"📚 Detailed Information About {tumor_type}")
-        st.markdown(fetch_gemini_insights(tumor_type))
-
-        # Final interpretation
-        if all(diagnosis == "No Tumor" for _, diagnosis, _ in results):
-            st.success("**Final Interpretation**: No evidence of a tumor detected across all uploaded views.")
-            st.balloons()
+        # Simple interpretation
+        if diagnosis == "No Tumor":
+            st.success("No evidence of a tumor detected in the uploaded image.")
         else:
-            st.error("**Final Interpretation**: Tumor detected in one or more views. Please consult a neurologist/radiologist for further evaluation.")
+            st.error("Tumor features detected in this image. Please consult a neurologist/radiologist for further evaluation.")
 
     except Exception as e:
         st.error(f"❌ An error occurred: {e}")
-elif uploaded_files:
-    st.warning("Please upload exactly 4 images (Left, Right, Top, and Bottom views).")
 else:
-    st.info("Upload MRI scans to begin the analysis.")
+    st.info("Upload an image to begin the analysis.")
 
 # Footer
 st.markdown("---")
