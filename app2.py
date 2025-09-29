@@ -8,7 +8,6 @@ import gdown
 import os
 
 # Configure the generative AI model with your API key (hardcoded)
-# NOTE: consider moving this to st.secrets for safety in production.
 genai.configure(api_key="AIzaSyB2G7Xyl8i74UQnAOyfP3Il9PU5OC72Alo")
 
 # Define the tumor types
@@ -21,31 +20,6 @@ model_drive_links = {
     "Inception": "15QeQquQ_-IoOmGy8ZLOaG64VPBgzqD76",
 }
 
-# -------- Per-model input sizes & preprocessing --------
-from tensorflow.keras.applications.inception_v3 import preprocess_input as inception_preprocess
-try:
-    from tensorflow.keras.applications.efficientnet import preprocess_input as efficientnet_preprocess
-    HAS_EFF_PREPROC = True
-except Exception:
-    HAS_EFF_PREPROC = False
-
-MODEL_CONFIG = {
-    "VGGNet": {
-        "size": (224, 224),
-        "preprocess": "normalize_01",  # scale to [0,1]
-    },
-    "EfficientNet": {
-        "size": (224, 224),
-        # If your EfficientNet was trained with keras.applications.efficientnet preprocessing,
-        # change to "efficientnet_preprocess".
-        "preprocess": "normalize_01",
-    },
-    "Inception": {
-        "size": (299, 299),
-        "preprocess": "inception_preprocess",  # maps to [-1, 1]
-    },
-}
-
 # Ensure model directory exists
 os.makedirs("models", exist_ok=True)
 
@@ -53,64 +27,21 @@ os.makedirs("models", exist_ok=True)
 def download_model(model_name):
     file_id = model_drive_links[model_name]
     model_path = f"models/{model_name}.h5"
+    
     if not os.path.exists(model_path):  # Avoid re-downloading
         st.info(f"Downloading {model_name} model... ")
         gdown.download(f"https://drive.google.com/uc?id={file_id}", model_path, quiet=False)
         st.success(f"{model_name} downloaded successfully!")
     return model_path
 
-# -------- Robust Flatten fix & model loader --------
+# Load model function
 def load_model(model_path):
-    class FlattenFix(tf.keras.layers.Layer):
-        """A robust replacement for bad saved Flatten graphs like Flatten()([x])."""
-        def call(self, inputs):
-            x = inputs
-            # unwrap nested lists/tuples until we reach a tensor-like
-            while isinstance(x, (list, tuple)) and len(x) > 0:
-                x = x[0]
-            # Try to convert non-tensor to tensor if possible
-            if not hasattr(x, "shape"):
-                try:
-                    x = tf.convert_to_tensor(x)
-                except Exception:
-                    # If still not tensor-like, raise a clear error
-                    raise TypeError("FlattenFix received non-tensor input after unwrapping.")
-            # Flatten via reshape to avoid relying on Flatten.call internals
-            x = tf.reshape(x, (tf.shape(x)[0], -1))
-            return x
-
-    custom_objects = {"Flatten": FlattenFix}
-
-    try:
-        return tf.keras.models.load_model(
-            model_path, compile=False, custom_objects=custom_objects, safe_mode=False
-        )
-    except TypeError:
-        return tf.keras.models.load_model(
-            model_path, compile=False, custom_objects=custom_objects
-        )
-
-# -------- Global preprocess settings that change per selection --------
-CURRENT_SIZE = (224, 224)
-CURRENT_PREPROC = "normalize_01"
+    return tf.keras.models.load_model(model_path)
 
 def preprocess_image(image):
-    """
-    image: numpy RGB array
-    Applies per-model resizing + preprocessing selected via CURRENT_SIZE / CURRENT_PREPROC.
-    """
-    # Keep RGB (do NOT swap to BGR unless you trained that way)
-    image = cv2.resize(image, CURRENT_SIZE, interpolation=cv2.INTER_AREA).astype("float32")
-
-    if CURRENT_PREPROC == "normalize_01":
-        image = image / 255.0
-    elif CURRENT_PREPROC == "inception_preprocess":
-        image = inception_preprocess(image)  # [-1, 1]
-    elif CURRENT_PREPROC == "efficientnet_preprocess" and HAS_EFF_PREPROC:
-        image = efficientnet_preprocess(image)
-    else:
-        image = image / 255.0
-
+    image = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
+    image = cv2.resize(image, (224, 224))
+    image = np.array(image) / 255.0
     image = np.expand_dims(image, axis=0)
     return image
 
@@ -122,14 +53,10 @@ def predict(model, image):
     return predicted_class[0], confidence
 
 def fetch_gemini_insights(tumor_type):
-    # Use a valid model id
-    prompt = (
-        f"Provide concise, clinician-style information for {tumor_type} in adult patients. "
-        "Cover: typical symptoms, initial evaluation, common treatments, expected prognosis, "
-        "and red-flag signs that require urgent care. Bullet points + short paragraphs. Not medical advice."
-    )
+    prompt = f"Please provide detailed information about {tumor_type}. Include symptoms, treatment options, and prognosis, give the information like a doctor."
+    
     try:
-        model = genai.GenerativeModel("gemini-1.5-flash")
+        model = genai.GenerativeModel("gemini-1.5-flash-latest")
         response = model.generate_content(prompt)
         return response.text
     except Exception as e:
@@ -153,16 +80,6 @@ st.sidebar.info("Upload images and select the model for analysis.")
 selected_model_name = st.sidebar.selectbox("Select CNN Model", list(model_drive_links.keys()))
 selected_model_path = download_model(selected_model_name)
 
-# Set per-model preprocess config
-CURRENT_SIZE = MODEL_CONFIG[selected_model_name]["size"]
-CURRENT_PREPROC = MODEL_CONFIG[selected_model_name]["preprocess"]
-
-# Optional toggle to use EfficientNet official preprocessing if that’s how you trained
-if selected_model_name == "EfficientNet" and HAS_EFF_PREPROC:
-    use_eff_pre = st.sidebar.checkbox("Use keras EfficientNet preprocessing", value=False)
-    if use_eff_pre:
-        CURRENT_PREPROC = "efficientnet_preprocess"
-
 # Upload multiple images
 st.header(" Upload MRI Scans (All Views)")
 uploaded_files = st.file_uploader(
@@ -178,8 +95,7 @@ if uploaded_files and len(uploaded_files) == 4:
         results = []
         views = ["Left", "Right", "Top", "Bottom"]
         for idx, uploaded_file in enumerate(uploaded_files):
-            # Ensure 3-channel RGB (avoids grayscale/RGBA issues)
-            image = Image.open(uploaded_file).convert("RGB")
+            image = Image.open(uploaded_file)
             st.image(image, caption=f"{views[idx]} View", use_container_width=True)
 
             image_np = np.array(image)
