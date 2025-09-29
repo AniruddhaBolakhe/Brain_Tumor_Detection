@@ -49,50 +49,51 @@ def download_model(model_name):
 
 # ----- Robust Flatten shim & model loader -----
 def load_model(model_path):
-    # Clear any previously-loaded custom layers lingering in memory/caches
+    # Clear previous graphs so Streamlit hot-reload doesn’t keep old classes around
     tf.keras.backend.clear_session()
 
     class FlattenShim(tf.keras.layers.Layer):
         """
-        Replacement for bad saved graphs that did Flatten()([x]) (or nested).
-        Accepts arbitrary *args/**kwargs (e.g., data_format) and flattens via tf.reshape.
+        Replacement for saved graphs that did Flatten()([x]).
+        We only unwrap list/tuple and delegate to a real Flatten, so Keras retains static shape inference.
         """
         def __init__(self, *args, **kwargs):
-            # Ignore unknown kwargs (common in legacy configs)
+            # Saved configs sometimes include unknown kwargs (e.g., data_format) -> ignore safely
             kwargs.pop("data_format", None)
             super().__init__(*args, **kwargs)
+            self._flatten = tf.keras.layers.Flatten()
+
+        def build(self, input_shape):
+            # If the incoming shape is a list/tuple (because the bad graph passed [x]),
+            # take the first element’s shape.
+            s = input_shape[0] if isinstance(input_shape, (list, tuple)) else input_shape
+            self._flatten.build(s)
+            super().build(input_shape)
 
         def call(self, *args, **kwargs):
-            # Pull input robustly
+            # Accept any signature; pull the first positional or 'inputs' kw
             x = args[0] if args else kwargs.get("inputs", None)
             if x is None:
                 raise ValueError("FlattenShim received no inputs.")
 
-            # Unwrap ANY nested structure and take the first tensor-like item
-            from tensorflow import nest as tf_nest
-            flat = tf_nest.flatten(x)
-            if not flat:
-                raise ValueError("FlattenShim received an empty nested structure.")
-            x = flat[0]
+            # Unwrap nested lists/tuples until a tensor-like is reached
+            while isinstance(x, (list, tuple)) and len(x) > 0:
+                x = x[0]
+            return self._flatten(x)
 
-            # Ensure tensor
-            if not hasattr(x, "shape"):
-                x = tf.convert_to_tensor(x)
-
-            # Flatten to (batch, -1)
-            return tf.reshape(x, (tf.shape(x)[0], -1))
+        def compute_output_shape(self, input_shape):
+            s = input_shape[0] if isinstance(input_shape, (list, tuple)) else input_shape
+            return self._flatten.compute_output_shape(s)
 
         def get_config(self):
             base = super().get_config()
-            return base
+            return base  # no extra fields
 
     custom_objects = {
-        "Flatten": FlattenShim,  # map saved "Flatten" to our shim
-        # Some exports record fully-qualified names; map them too, harmless if unused:
-        "keras.layers.core.flatten.Flatten": FlattenShim,
+        "Flatten": FlattenShim,
+        "keras.layers.core.flatten.Flatten": FlattenShim,  # some exports use fqcn
     }
 
-    # Keras 3 often needs safe_mode=False; older versions don't support it
     try:
         return tf.keras.models.load_model(
             model_path, compile=False, custom_objects=custom_objects, safe_mode=False
@@ -140,7 +141,7 @@ def fetch_gemini_insights(tumor_type):
         "and red-flag signs requiring urgent care. Bullet points + short paragraphs. Not medical advice."
     )
     try:
-        # Use a supported model id (no '-latest')
+        # Use a supported model id
         model = genai.GenerativeModel("gemini-1.5-flash")
         response = model.generate_content(prompt)
         return getattr(response, "text", "No response text.")
