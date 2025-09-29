@@ -113,7 +113,7 @@ def fetch_gemini_insights(tumor_type):
     )
     try:
         # FIX: use a valid model id (no '-latest')
-        model = genai.GenerativeModel("gemini-1.5-flash")
+        model = genai.GenerativeModel("gemini-2.5-flash")
         response = model.generate_content(prompt)
         return response.text
     except Exception as e:
@@ -203,3 +203,4 @@ st.markdown("""
 - [Nabhya Sharma](https://www.linkedin.com/in/nabhya-sharma-b0a374248/)
 - [Pranav Karwa](https://www.linkedin.com/in/pranav-karwa-a91663249)
 """)
+
